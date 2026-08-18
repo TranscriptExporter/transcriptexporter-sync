@@ -29,7 +29,7 @@ Repeat step 3 in each TranscriptExporter extension you use - the same key pairs 
 
 ## Manual install
 
-1. Download `main.js` and `manifest.json` from the [latest release](https://github.com/GOAT502-Digital/transcriptexporter-sync/releases).
+1. Download `main.js` and `manifest.json` from the [latest release](https://github.com/TranscriptExporter/transcriptexporter-sync/releases).
 2. Create the folder `<your vault>/.obsidian/plugins/transcriptexporter-sync/` and put both files in it.
 3. In Obsidian: Settings, Community plugins, enable **TranscriptExporter Sync**.
 
