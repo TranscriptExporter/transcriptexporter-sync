@@ -44,6 +44,9 @@ var DEFAULT_SETTINGS = {
   apiKey: "",
   notesReceived: 0
 };
+function errorMessage(e) {
+  return e instanceof Error ? e.message : String(e);
+}
 var TranscriptExporterSyncPlugin = class extends import_obsidian.Plugin {
   constructor() {
     super(...arguments);
@@ -69,7 +72,12 @@ var TranscriptExporterSyncPlugin = class extends import_obsidian.Plugin {
     this.stopServer();
   }
   async loadSettings() {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    const data = await this.loadData();
+    this.settings = Object.assign(
+      {},
+      DEFAULT_SETTINGS,
+      data != null ? data : {}
+    );
   }
   async saveSettings() {
     await this.saveData(this.settings);
@@ -85,7 +93,7 @@ var TranscriptExporterSyncPlugin = class extends import_obsidian.Plugin {
     const port = this.settings.port;
     const server = http.createServer((req, res) => {
       this.handleRequest(req, res).catch((e) => {
-        this.sendJson(res, 500, { ok: false, error: "internal", message: String(e && e.message || e) });
+        this.sendJson(res, 500, { ok: false, error: "internal", message: errorMessage(e) });
       });
     });
     server.on("connection", (socket) => {
@@ -101,7 +109,6 @@ var TranscriptExporterSyncPlugin = class extends import_obsidian.Plugin {
     });
     server.listen(port, "127.0.0.1", () => {
       this.serverState = { kind: "listening", port };
-      console.log(`TranscriptExporter Sync listening on 127.0.0.1:${port}`);
       this.refreshSettingsTab();
     });
     this.server = server;
@@ -110,14 +117,14 @@ var TranscriptExporterSyncPlugin = class extends import_obsidian.Plugin {
     if (this.server) {
       try {
         this.server.close();
-      } catch (_) {
+      } catch (e) {
       }
       this.server = null;
     }
     for (const socket of this.sockets) {
       try {
         socket.destroy();
-      } catch (_) {
+      } catch (e) {
       }
     }
     this.sockets.clear();
@@ -132,7 +139,7 @@ var TranscriptExporterSyncPlugin = class extends import_obsidian.Plugin {
     }
   }
   refreshSettingsTab() {
-    if (this.settingsTab && this.settingsTab.isVisible()) {
+    if (this.settingsTab) {
       this.settingsTab.renderStatus();
     }
   }
@@ -186,7 +193,7 @@ var TranscriptExporterSyncPlugin = class extends import_obsidian.Plugin {
     if (!expected || presented.length !== expected.length) return false;
     try {
       return (0, import_crypto.timingSafeEqual)(Buffer.from(presented), Buffer.from(expected));
-    } catch (_) {
+    } catch (e) {
       return false;
     }
   }
@@ -195,25 +202,28 @@ var TranscriptExporterSyncPlugin = class extends import_obsidian.Plugin {
     try {
       body = await this.readBody(req);
     } catch (e) {
-      this.sendJson(res, 413, { ok: false, error: "too_large", message: e.message });
+      this.sendJson(res, 413, { ok: false, error: "too_large", message: errorMessage(e) });
       return;
     }
     let parsed;
     try {
       parsed = JSON.parse(body);
-    } catch (_) {
+    } catch (e) {
       this.sendJson(res, 400, { ok: false, error: "bad_json", message: "Body must be JSON: {path, content}" });
       return;
     }
-    if (typeof parsed.path !== "string" || typeof parsed.content !== "string") {
+    const note = parsed;
+    if (typeof note.path !== "string" || typeof note.content !== "string") {
       this.sendJson(res, 400, { ok: false, error: "bad_request", message: "path and content must be strings" });
       return;
     }
+    const rawPath = note.path;
+    const content = note.content;
     let vaultPath;
     try {
-      vaultPath = this.sanitizeVaultPath(parsed.path);
+      vaultPath = this.sanitizeVaultPath(rawPath);
     } catch (e) {
-      this.sendJson(res, 400, { ok: false, error: "bad_path", message: e.message });
+      this.sendJson(res, 400, { ok: false, error: "bad_path", message: errorMessage(e) });
       return;
     }
     if (this.app.vault.getAbstractFileByPath(vaultPath)) {
@@ -222,13 +232,13 @@ var TranscriptExporterSyncPlugin = class extends import_obsidian.Plugin {
     }
     try {
       await this.ensureParentFolders(vaultPath);
-      await this.app.vault.create(vaultPath, parsed.content);
+      await this.app.vault.create(vaultPath, content);
     } catch (e) {
       if (this.app.vault.getAbstractFileByPath(vaultPath)) {
         this.sendJson(res, 200, { ok: true, skipped: true, path: vaultPath });
         return;
       }
-      this.sendJson(res, 500, { ok: false, error: "write_failed", message: String(e && e.message || e) });
+      this.sendJson(res, 500, { ok: false, error: "write_failed", message: errorMessage(e) });
       return;
     }
     this.settings.notesReceived += 1;
@@ -299,62 +309,102 @@ var SyncSettingTab = class extends import_obsidian.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
     this.statusEl = null;
-    this.visible = false;
     this.plugin = plugin;
   }
-  isVisible() {
-    return this.visible;
-  }
   hide() {
-    this.visible = false;
+    this.statusEl = null;
   }
   renderStatus() {
-    if (!this.statusEl) return;
+    if (!this.statusEl || !this.statusEl.isConnected) return;
     const state = this.plugin.getServerState();
     this.statusEl.empty();
     if (state.kind === "listening") {
-      this.statusEl.createEl("span", {
+      this.statusEl.createSpan({
         text: `Running. Listening on 127.0.0.1:${state.port}`,
         cls: "transcriptexporter-sync-status-ok"
       });
     } else if (state.kind === "error") {
-      this.statusEl.createEl("span", { text: state.message });
+      this.statusEl.createSpan({ text: state.message });
     } else {
-      this.statusEl.createEl("span", { text: "Stopped" });
+      this.statusEl.createSpan({ text: "Stopped" });
     }
   }
-  display() {
-    this.visible = true;
-    const { containerEl } = this;
-    containerEl.empty();
-    containerEl.createEl("p", {
-      text: "Pairs this vault with the TranscriptExporter Chrome extensions (Granola, Fathom, Fireflies). The extension delivers meeting notes to this plugin over your own machine (127.0.0.1); nothing leaves your computer and no account is involved. Files already in your vault are never changed, so your edits are safe."
-    });
-    const statusSetting = new import_obsidian.Setting(containerEl).setName("Status").setDesc("");
-    this.statusEl = statusSetting.descEl;
+  buildStatusRow(setting) {
+    setting.setName("Status").setDesc("");
+    this.statusEl = setting.descEl;
     this.renderStatus();
-    new import_obsidian.Setting(containerEl).setName("Enable sync server").setDesc("Turn off to stop accepting notes from the extension.").addToggle((toggle) => toggle.setValue(this.plugin.settings.serverEnabled).onChange(async (value) => {
+  }
+  buildEnableRow(setting) {
+    setting.setName("Enable sync server").setDesc("Turn off to stop accepting notes from the extension.").addToggle((toggle) => toggle.setValue(this.plugin.settings.serverEnabled).onChange(async (value) => {
       this.plugin.settings.serverEnabled = value;
       await this.plugin.saveSettings();
       await this.plugin.restartServer();
     }));
-    new import_obsidian.Setting(containerEl).setName("Port").setDesc("The extension must use the same port. Change only if another app already uses this one.").addText((text) => text.setValue(String(this.plugin.settings.port)).onChange(async (value) => {
+  }
+  buildPortRow(setting) {
+    setting.setName("Port").setDesc("The extension must use the same port. Change only if another app already uses this one.").addText((text) => text.setValue(String(this.plugin.settings.port)).onChange(async (value) => {
       const port = parseInt(value, 10);
       if (!Number.isInteger(port) || port < 1024 || port > 65535) return;
       this.plugin.settings.port = port;
       await this.plugin.saveSettings();
       await this.plugin.restartServer();
     }));
-    new import_obsidian.Setting(containerEl).setName("Pairing key").setDesc("Copy this into the TranscriptExporter extension settings under Obsidian vault sync.").addButton((btn) => btn.setButtonText("Copy key").setCta().onClick(async () => {
+  }
+  buildPairingKeyRow(setting) {
+    setting.setName("Pairing key").setDesc("Copy this into the TranscriptExporter extension settings under Obsidian vault sync.").addButton((btn) => btn.setButtonText("Copy key").setCta().onClick(async () => {
       await navigator.clipboard.writeText(this.plugin.settings.apiKey);
       new import_obsidian.Notice("Pairing key copied");
-    })).addButton((btn) => btn.setButtonText("Regenerate").setWarning().onClick(async () => {
-      this.plugin.settings.apiKey = (0, import_crypto.randomBytes)(24).toString("hex");
-      await this.plugin.saveSettings();
-      new import_obsidian.Notice("New pairing key generated. Update the extension with the new key.");
-      this.display();
-    }));
-    const keyEl = containerEl.createEl("div", { cls: "setting-item-description" });
-    keyEl.createEl("code", { text: this.plugin.settings.apiKey });
+    })).addButton((btn) => {
+      btn.setButtonText("Regenerate");
+      const maybe = btn;
+      if (typeof maybe.setDestructive === "function") {
+        maybe.setDestructive();
+      } else {
+        btn.setWarning();
+      }
+      btn.onClick(async () => {
+        this.plugin.settings.apiKey = (0, import_crypto.randomBytes)(24).toString("hex");
+        await this.plugin.saveSettings();
+        new import_obsidian.Notice("New pairing key generated. Update the extension with the new key.");
+        this.display();
+      });
+    });
+    setting.descEl.createEl("br");
+    setting.descEl.createEl("code", { text: this.plugin.settings.apiKey });
+  }
+  getSettingDefinitions() {
+    return [
+      {
+        name: "Status",
+        desc: "Whether the local receiver is running.",
+        render: (s) => this.buildStatusRow(s)
+      },
+      {
+        name: "Enable sync server",
+        desc: "Turn off to stop accepting notes from the extension.",
+        render: (s) => this.buildEnableRow(s)
+      },
+      {
+        name: "Port",
+        desc: "The extension must use the same port.",
+        render: (s) => this.buildPortRow(s)
+      },
+      {
+        name: "Pairing key",
+        desc: "Copy this into the TranscriptExporter extension settings.",
+        render: (s) => this.buildPairingKeyRow(s)
+      }
+    ];
+  }
+  display() {
+    const { containerEl } = this;
+    containerEl.empty();
+    containerEl.createEl("p", {
+      text: "Pairs this vault with the TranscriptExporter Chrome extensions (Granola, Fathom, Fireflies). The extension delivers meeting notes to this plugin over your own machine (127.0.0.1); nothing leaves your computer and no account is involved. Files already in your vault are never changed, so your edits are safe."
+    });
+    this.buildStatusRow(new import_obsidian.Setting(containerEl));
+    this.buildEnableRow(new import_obsidian.Setting(containerEl));
+    this.buildPortRow(new import_obsidian.Setting(containerEl));
+    this.buildPairingKeyRow(new import_obsidian.Setting(containerEl));
   }
 };

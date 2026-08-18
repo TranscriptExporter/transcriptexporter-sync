@@ -3,8 +3,8 @@
 //
 // Runs a localhost-only HTTP server inside Obsidian so the TranscriptExporter
 // Chrome extensions can deliver meeting notes straight into the vault. This
-// is what makes true always-on hourly sync possible: Chrome's File System
-// Access grants never reach extension service workers, but a plain fetch to
+// is what makes true always-on sync possible: Chrome's File System Access
+// grants never reach extension service workers, but a plain fetch to
 // 127.0.0.1 works from anywhere in the extension, no user gesture needed.
 //
 // Security posture:
@@ -14,11 +14,11 @@
 // - Only .md files are accepted, paths are sanitized segment by segment, and
 //   traversal (.., absolute paths) is rejected outright.
 // - Skip-if-exists write policy: a file already in the vault is NEVER
-//   rewritten. User edits are sacred. Same policy as the extensions' direct
-//   vault writes.
+//   rewritten. User edits are sacred.
 
 import {
     App,
+    ButtonComponent,
     Notice,
     Plugin,
     PluginSettingTab,
@@ -52,6 +52,10 @@ type ServerState =
     | { kind: 'listening'; port: number }
     | { kind: 'error'; message: string };
 
+function errorMessage(e: unknown): string {
+    return e instanceof Error ? e.message : String(e);
+}
+
 export default class TranscriptExporterSyncPlugin extends Plugin {
     settings: SyncSettings = { ...DEFAULT_SETTINGS };
     private server: http.Server | null = null;
@@ -81,7 +85,12 @@ export default class TranscriptExporterSyncPlugin extends Plugin {
     }
 
     async loadSettings() {
-        this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+        const data: unknown = await this.loadData();
+        this.settings = Object.assign(
+            {},
+            DEFAULT_SETTINGS,
+            (data ?? {}) as Partial<SyncSettings>
+        );
     }
 
     async saveSettings() {
@@ -101,8 +110,8 @@ export default class TranscriptExporterSyncPlugin extends Plugin {
 
         const port = this.settings.port;
         const server = http.createServer((req, res) => {
-            this.handleRequest(req, res).catch((e) => {
-                this.sendJson(res, 500, { ok: false, error: 'internal', message: String(e && e.message || e) });
+            this.handleRequest(req, res).catch((e: unknown) => {
+                this.sendJson(res, 500, { ok: false, error: 'internal', message: errorMessage(e) });
             });
         });
 
@@ -125,7 +134,6 @@ export default class TranscriptExporterSyncPlugin extends Plugin {
 
         server.listen(port, '127.0.0.1', () => {
             this.serverState = { kind: 'listening', port };
-            console.log(`TranscriptExporter Sync listening on 127.0.0.1:${port}`);
             this.refreshSettingsTab();
         });
 
@@ -134,11 +142,11 @@ export default class TranscriptExporterSyncPlugin extends Plugin {
 
     stopServer() {
         if (this.server) {
-            try { this.server.close(); } catch (_) { /* already closing */ }
+            try { this.server.close(); } catch { /* already closing */ }
             this.server = null;
         }
         for (const socket of this.sockets) {
-            try { socket.destroy(); } catch (_) { /* already gone */ }
+            try { socket.destroy(); } catch { /* already gone */ }
         }
         this.sockets.clear();
         this.serverState = { kind: 'stopped' };
@@ -154,7 +162,7 @@ export default class TranscriptExporterSyncPlugin extends Plugin {
     }
 
     private refreshSettingsTab() {
-        if (this.settingsTab && this.settingsTab.isVisible()) {
+        if (this.settingsTab) {
             this.settingsTab.renderStatus();
         }
     }
@@ -224,7 +232,7 @@ export default class TranscriptExporterSyncPlugin extends Plugin {
         if (!expected || presented.length !== expected.length) return false;
         try {
             return timingSafeEqual(Buffer.from(presented), Buffer.from(expected));
-        } catch (_) {
+        } catch {
             return false;
         }
     }
@@ -233,29 +241,32 @@ export default class TranscriptExporterSyncPlugin extends Plugin {
         let body: string;
         try {
             body = await this.readBody(req);
-        } catch (e: any) {
-            this.sendJson(res, 413, { ok: false, error: 'too_large', message: e.message });
+        } catch (e: unknown) {
+            this.sendJson(res, 413, { ok: false, error: 'too_large', message: errorMessage(e) });
             return;
         }
 
-        let parsed: any;
+        let parsed: unknown;
         try {
             parsed = JSON.parse(body);
-        } catch (_) {
+        } catch {
             this.sendJson(res, 400, { ok: false, error: 'bad_json', message: 'Body must be JSON: {path, content}' });
             return;
         }
 
-        if (typeof parsed.path !== 'string' || typeof parsed.content !== 'string') {
+        const note = parsed as { path?: unknown; content?: unknown };
+        if (typeof note.path !== 'string' || typeof note.content !== 'string') {
             this.sendJson(res, 400, { ok: false, error: 'bad_request', message: 'path and content must be strings' });
             return;
         }
+        const rawPath: string = note.path;
+        const content: string = note.content;
 
         let vaultPath: string;
         try {
-            vaultPath = this.sanitizeVaultPath(parsed.path);
-        } catch (e: any) {
-            this.sendJson(res, 400, { ok: false, error: 'bad_path', message: e.message });
+            vaultPath = this.sanitizeVaultPath(rawPath);
+        } catch (e: unknown) {
+            this.sendJson(res, 400, { ok: false, error: 'bad_path', message: errorMessage(e) });
             return;
         }
 
@@ -269,15 +280,15 @@ export default class TranscriptExporterSyncPlugin extends Plugin {
 
         try {
             await this.ensureParentFolders(vaultPath);
-            await this.app.vault.create(vaultPath, parsed.content);
-        } catch (e: any) {
+            await this.app.vault.create(vaultPath, content);
+        } catch (e: unknown) {
             // A race with another write can create the file between the probe
             // and create(); that is a skip, not a failure.
             if (this.app.vault.getAbstractFileByPath(vaultPath)) {
                 this.sendJson(res, 200, { ok: true, skipped: true, path: vaultPath });
                 return;
             }
-            this.sendJson(res, 500, { ok: false, error: 'write_failed', message: String(e && e.message || e) });
+            this.sendJson(res, 500, { ok: false, error: 'write_failed', message: errorMessage(e) });
             return;
         }
 
@@ -334,7 +345,7 @@ export default class TranscriptExporterSyncPlugin extends Plugin {
             if (!this.app.vault.getAbstractFileByPath(acc)) {
                 try {
                     await this.app.vault.createFolder(acc);
-                } catch (e: any) {
+                } catch (e: unknown) {
                     // Concurrent requests race on folder creation; an
                     // already-exists failure is success.
                     if (!this.app.vault.getAbstractFileByPath(acc)) throw e;
@@ -352,62 +363,62 @@ export default class TranscriptExporterSyncPlugin extends Plugin {
 }
 
 // ----------------------------------------------------------------------
-// Settings tab
+// Settings tab. Implements both the imperative display() (Obsidian < 1.13)
+// and the declarative getSettingDefinitions() (1.13+, which bypasses
+// display() and makes the settings searchable). Both paths share the same
+// row builders so behavior is identical.
 // ----------------------------------------------------------------------
+
+interface SettingRenderDefinition {
+    name: string;
+    desc?: string;
+    render: (setting: Setting) => void;
+}
+
+// setDestructive replaced setWarning in newer Obsidian versions; feature-
+// detect so the plugin still runs on minAppVersion without deprecated calls
+// on current versions.
+interface MaybeDestructiveButton {
+    setDestructive?: () => unknown;
+}
 
 class SyncSettingTab extends PluginSettingTab {
     plugin: TranscriptExporterSyncPlugin;
     private statusEl: HTMLElement | null = null;
-    private visible = false;
 
     constructor(app: App, plugin: TranscriptExporterSyncPlugin) {
         super(app, plugin);
         this.plugin = plugin;
     }
 
-    isVisible(): boolean {
-        return this.visible;
-    }
-
     hide() {
-        this.visible = false;
+        this.statusEl = null;
     }
 
     renderStatus() {
-        if (!this.statusEl) return;
+        if (!this.statusEl || !this.statusEl.isConnected) return;
         const state = this.plugin.getServerState();
         this.statusEl.empty();
         if (state.kind === 'listening') {
-            this.statusEl.createEl('span', {
+            this.statusEl.createSpan({
                 text: `Running. Listening on 127.0.0.1:${state.port}`,
                 cls: 'transcriptexporter-sync-status-ok'
             });
         } else if (state.kind === 'error') {
-            this.statusEl.createEl('span', { text: state.message });
+            this.statusEl.createSpan({ text: state.message });
         } else {
-            this.statusEl.createEl('span', { text: 'Stopped' });
+            this.statusEl.createSpan({ text: 'Stopped' });
         }
     }
 
-    display(): void {
-        this.visible = true;
-        const { containerEl } = this;
-        containerEl.empty();
-
-        containerEl.createEl('p', {
-            text: 'Pairs this vault with the TranscriptExporter Chrome extensions (Granola, Fathom, Fireflies). '
-                + 'The extension delivers meeting notes to this plugin over your own machine '
-                + '(127.0.0.1); nothing leaves your computer and no account is involved. '
-                + 'Files already in your vault are never changed, so your edits are safe.'
-        });
-
-        const statusSetting = new Setting(containerEl)
-            .setName('Status')
-            .setDesc('');
-        this.statusEl = statusSetting.descEl;
+    private buildStatusRow(setting: Setting) {
+        setting.setName('Status').setDesc('');
+        this.statusEl = setting.descEl;
         this.renderStatus();
+    }
 
-        new Setting(containerEl)
+    private buildEnableRow(setting: Setting) {
+        setting
             .setName('Enable sync server')
             .setDesc('Turn off to stop accepting notes from the extension.')
             .addToggle((toggle) => toggle
@@ -417,8 +428,10 @@ class SyncSettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                     await this.plugin.restartServer();
                 }));
+    }
 
-        new Setting(containerEl)
+    private buildPortRow(setting: Setting) {
+        setting
             .setName('Port')
             .setDesc('The extension must use the same port. Change only if another app already uses this one.')
             .addText((text) => text
@@ -430,8 +443,10 @@ class SyncSettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                     await this.plugin.restartServer();
                 }));
+    }
 
-        new Setting(containerEl)
+    private buildPairingKeyRow(setting: Setting) {
+        setting
             .setName('Pairing key')
             .setDesc('Copy this into the TranscriptExporter extension settings under Obsidian vault sync.')
             .addButton((btn) => btn
@@ -441,17 +456,64 @@ class SyncSettingTab extends PluginSettingTab {
                     await navigator.clipboard.writeText(this.plugin.settings.apiKey);
                     new Notice('Pairing key copied');
                 }))
-            .addButton((btn) => btn
-                .setButtonText('Regenerate')
-                .setWarning()
-                .onClick(async () => {
+            .addButton((btn: ButtonComponent) => {
+                btn.setButtonText('Regenerate');
+                const maybe = btn as unknown as MaybeDestructiveButton;
+                if (typeof maybe.setDestructive === 'function') {
+                    maybe.setDestructive();
+                } else {
+                    btn.setWarning();
+                }
+                btn.onClick(async () => {
                     this.plugin.settings.apiKey = randomBytes(24).toString('hex');
                     await this.plugin.saveSettings();
                     new Notice('New pairing key generated. Update the extension with the new key.');
                     this.display();
-                }));
+                });
+            });
+        setting.descEl.createEl('br');
+        setting.descEl.createEl('code', { text: this.plugin.settings.apiKey });
+    }
 
-        const keyEl = containerEl.createEl('div', { cls: 'setting-item-description' });
-        keyEl.createEl('code', { text: this.plugin.settings.apiKey });
+    getSettingDefinitions(): SettingRenderDefinition[] {
+        return [
+            {
+                name: 'Status',
+                desc: 'Whether the local receiver is running.',
+                render: (s) => this.buildStatusRow(s)
+            },
+            {
+                name: 'Enable sync server',
+                desc: 'Turn off to stop accepting notes from the extension.',
+                render: (s) => this.buildEnableRow(s)
+            },
+            {
+                name: 'Port',
+                desc: 'The extension must use the same port.',
+                render: (s) => this.buildPortRow(s)
+            },
+            {
+                name: 'Pairing key',
+                desc: 'Copy this into the TranscriptExporter extension settings.',
+                render: (s) => this.buildPairingKeyRow(s)
+            }
+        ];
+    }
+
+    display(): void {
+        const { containerEl } = this;
+        containerEl.empty();
+
+        containerEl.createEl('p', {
+            text: 'Pairs this vault with the TranscriptExporter Chrome extensions (Granola, Fathom, Fireflies). '
+                + 'The extension delivers meeting notes to this plugin over your own machine '
+                + '(127.0.0.1); nothing leaves your computer and no account is involved. '
+                + 'Files already in your vault are never changed, so your edits are safe.'
+        });
+
+        this.buildStatusRow(new Setting(containerEl));
+        this.buildEnableRow(new Setting(containerEl));
+        this.buildPortRow(new Setting(containerEl));
+        this.buildPairingKeyRow(new Setting(containerEl));
     }
 }
