@@ -283,12 +283,12 @@ var TranscriptExporterSyncPlugin = class extends import_obsidian.Plugin {
       this.pairPending = false;
       this.sendJson(res, status, payload);
     };
-    const timer = setTimeout(() => {
+    const timer = window.setTimeout(() => {
       modal.close();
       settle(408, { ok: false, error: "timeout", message: "No decision was made in Obsidian" });
     }, 55e3);
     const modal = new PairApprovalModal(this.app, requesterName, (approved) => {
-      clearTimeout(timer);
+      window.clearTimeout(timer);
       if (approved) {
         settle(200, {
           ok: true,
@@ -303,7 +303,7 @@ var TranscriptExporterSyncPlugin = class extends import_obsidian.Plugin {
     modal.open();
     req.on("close", () => {
       if (!settled) {
-        clearTimeout(timer);
+        window.clearTimeout(timer);
         settled = true;
         this.pairPending = false;
         modal.close();
@@ -392,7 +392,7 @@ var PairApprovalModal = class extends import_obsidian.Modal {
     contentEl.createEl("p", {
       text: "Only allow this if you just clicked Connect in the TranscriptExporter browser extension."
     });
-    const row = contentEl.createEl("div", { cls: "modal-button-container" });
+    const row = contentEl.createDiv({ cls: "modal-button-container" });
     const allowBtn = row.createEl("button", { text: "Allow", cls: "mod-cta" });
     allowBtn.onclick = () => this.decide(true);
     const denyBtn = row.createEl("button", { text: "Deny" });

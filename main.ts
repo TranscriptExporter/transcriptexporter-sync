@@ -346,13 +346,13 @@ export default class TranscriptExporterSyncPlugin extends Plugin {
             this.sendJson(res, status, payload);
         };
 
-        const timer = setTimeout(() => {
+        const timer = window.setTimeout(() => {
             modal.close();
             settle(408, { ok: false, error: 'timeout', message: 'No decision was made in Obsidian' });
         }, 55000);
 
         const modal = new PairApprovalModal(this.app, requesterName, (approved) => {
-            clearTimeout(timer);
+            window.clearTimeout(timer);
             if (approved) {
                 settle(200, {
                     ok: true,
@@ -369,7 +369,7 @@ export default class TranscriptExporterSyncPlugin extends Plugin {
         // If the extension gives up (closes the request), free the slot.
         req.on('close', () => {
             if (!settled) {
-                clearTimeout(timer);
+                window.clearTimeout(timer);
                 settled = true;
                 this.pairPending = false;
                 modal.close();
@@ -475,7 +475,7 @@ class PairApprovalModal extends Modal {
         contentEl.createEl('p', {
             text: 'Only allow this if you just clicked Connect in the TranscriptExporter browser extension.'
         });
-        const row = contentEl.createEl('div', { cls: 'modal-button-container' });
+        const row = contentEl.createDiv({ cls: 'modal-button-container' });
         const allowBtn = row.createEl('button', { text: 'Allow', cls: 'mod-cta' });
         allowBtn.onclick = () => this.decide(true);
         const denyBtn = row.createEl('button', { text: 'Deny' });
