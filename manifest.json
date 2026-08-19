@@ -1,7 +1,7 @@
 {
     "id": "transcriptexporter-sync",
     "name": "TranscriptExporter Sync",
-    "version": "1.0.1",
+    "version": "1.1.0",
     "minAppVersion": "1.5.0",
     "description": "Receives meeting notes from the TranscriptExporter Chrome extensions (for Granola, Fathom, and Fireflies) and writes them into your vault automatically, minutes after each call.",
     "author": "TranscriptExporter",

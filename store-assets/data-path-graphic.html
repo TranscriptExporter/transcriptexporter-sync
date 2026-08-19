@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>TranscriptExporter Sync - store graphic</title>
+<style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+        background: #0f0f0f;
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    /* Screenshot this frame at 100% zoom: 1600x900 */
+    .stage {
+        width: 1600px;
+        height: 900px;
+        background: #1e1e1e;
+        padding: 110px 200px;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", sans-serif;
+        color: #dadada;
+    }
+    h1 {
+        font-size: 40px;
+        font-weight: 700;
+        color: #ffffff;
+        letter-spacing: -0.3px;
+        margin-bottom: 40px;
+    }
+    p {
+        font-size: 24px;
+        line-height: 1.65;
+        color: #b3b3b3;
+        max-width: 900px;
+        margin-bottom: 26px;
+    }
+    p strong { color: #e6e6e6; font-weight: 600; }
+    code.inline {
+        font-family: ui-monospace, "SF Mono", Menlo, monospace;
+        font-size: 21px;
+        background: #2a2a2a;
+        border-radius: 4px;
+        padding: 2px 8px;
+        color: #a78bfa;
+    }
+    pre {
+        margin-top: 44px;
+        background: #262626;
+        border-radius: 6px;
+        padding: 28px 34px;
+        font-family: ui-monospace, "SF Mono", Menlo, monospace;
+        font-size: 20px;
+        line-height: 1.85;
+        color: #b3b3b3;
+        display: inline-block;
+        min-width: 560px;
+    }
+    pre .dir { color: #a78bfa; }
+    pre .dim { color: #6f6f6f; }
+</style>
+</head>
+<body>
+<div class="stage">
+    <h1>How your meetings get here</h1>
+    <p>The TranscriptExporter extension checks for new Granola, Fathom, or Fireflies meetings every 10 minutes and hands each one to this plugin over <code class="inline">127.0.0.1</code>.</p>
+    <p><strong>No cloud. No account. Nothing leaves your computer.</strong> Notes you already have are never touched.</p>
+<pre>
+vault/
+<span class="dim">├──</span> <span class="dir">Granola/</span>
+<span class="dim">│   └──</span> Team standup - May 4.md
+<span class="dim">├──</span> <span class="dir">Fathom/</span>
+<span class="dim">└──</span> <span class="dir">Fireflies/</span>
+</pre>
+</div>
+</body>
+</html>

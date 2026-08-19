@@ -55,6 +55,10 @@ var TranscriptExporterSyncPlugin = class extends import_obsidian.Plugin {
     this.sockets = /* @__PURE__ */ new Set();
     this.serverState = { kind: "stopped" };
     this.settingsTab = null;
+    // One pending pairing request at a time; a decision or the 55s timeout
+    // clears it. Long-poll: the HTTP response is held open until the user
+    // decides, so the extension needs no second request.
+    this.pairPending = false;
   }
   async onload() {
     await this.loadSettings();
@@ -165,6 +169,10 @@ var TranscriptExporterSyncPlugin = class extends import_obsidian.Plugin {
       });
       return;
     }
+    if (req.method === "POST" && url === "/pair") {
+      await this.handlePairRequest(req, res);
+      return;
+    }
     if (!this.isAuthorized(req)) {
       this.sendJson(res, 401, { ok: false, error: "unauthorized", message: "Missing or invalid pairing key" });
       return;
@@ -246,6 +254,62 @@ var TranscriptExporterSyncPlugin = class extends import_obsidian.Plugin {
     });
     this.sendJson(res, 200, { ok: true, skipped: false, path: vaultPath });
   }
+  async handlePairRequest(req, res) {
+    if (this.pairPending) {
+      this.sendJson(res, 429, { ok: false, error: "busy", message: "A pairing request is already waiting for a decision in Obsidian" });
+      return;
+    }
+    let body;
+    try {
+      body = await this.readBody(req);
+    } catch (e) {
+      this.sendJson(res, 413, { ok: false, error: "too_large", message: errorMessage(e) });
+      return;
+    }
+    let requesterName = "A TranscriptExporter extension";
+    try {
+      const parsed = JSON.parse(body);
+      if (typeof parsed.name === "string") {
+        const clean = parsed.name.replace(/[^\x20-\x7E]/g, "").trim().slice(0, 48);
+        if (clean) requesterName = clean;
+      }
+    } catch (e) {
+    }
+    this.pairPending = true;
+    let settled = false;
+    const settle = (status, payload) => {
+      if (settled) return;
+      settled = true;
+      this.pairPending = false;
+      this.sendJson(res, status, payload);
+    };
+    const timer = setTimeout(() => {
+      modal.close();
+      settle(408, { ok: false, error: "timeout", message: "No decision was made in Obsidian" });
+    }, 55e3);
+    const modal = new PairApprovalModal(this.app, requesterName, (approved) => {
+      clearTimeout(timer);
+      if (approved) {
+        settle(200, {
+          ok: true,
+          key: this.settings.apiKey,
+          vault: this.app.vault.getName(),
+          version: this.manifest.version
+        });
+      } else {
+        settle(403, { ok: false, error: "denied", message: "The pairing request was denied in Obsidian" });
+      }
+    });
+    modal.open();
+    req.on("close", () => {
+      if (!settled) {
+        clearTimeout(timer);
+        settled = true;
+        this.pairPending = false;
+        modal.close();
+      }
+    });
+  }
   readBody(req) {
     return new Promise((resolve, reject) => {
       const chunks = [];
@@ -303,6 +367,43 @@ var TranscriptExporterSyncPlugin = class extends import_obsidian.Plugin {
     const body = JSON.stringify(payload);
     res.writeHead(status, { "Content-Type": "application/json" });
     res.end(body);
+  }
+};
+var PairApprovalModal = class extends import_obsidian.Modal {
+  constructor(app, requesterName, onDecision) {
+    super(app);
+    this.decided = false;
+    this.requesterName = requesterName;
+    this.onDecision = onDecision;
+  }
+  decide(approved) {
+    if (this.decided) return;
+    this.decided = true;
+    this.onDecision(approved);
+    this.close();
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.createEl("h2", { text: "Pairing request" });
+    contentEl.createEl("p", {
+      text: `"${this.requesterName}" wants to connect to TranscriptExporter Sync and write meeting notes into this vault.`
+    });
+    contentEl.createEl("p", {
+      text: "Only allow this if you just clicked Connect in the TranscriptExporter browser extension."
+    });
+    const row = contentEl.createEl("div", { cls: "modal-button-container" });
+    const allowBtn = row.createEl("button", { text: "Allow", cls: "mod-cta" });
+    allowBtn.onclick = () => this.decide(true);
+    const denyBtn = row.createEl("button", { text: "Deny" });
+    denyBtn.onclick = () => this.decide(false);
+  }
+  onClose() {
+    if (!this.decided) {
+      this.decided = true;
+      this.onDecision(false);
+    }
+    this.contentEl.empty();
   }
 };
 var SyncSettingTab = class extends import_obsidian.PluginSettingTab {
