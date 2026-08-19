@@ -387,7 +387,7 @@ var PairApprovalModal = class extends import_obsidian.Modal {
     contentEl.empty();
     contentEl.createEl("h2", { text: "Pairing request" });
     contentEl.createEl("p", {
-      text: `"${this.requesterName}" wants to connect to TranscriptExporter Sync and write meeting notes into this vault.`
+      text: `"${this.requesterName}" wants to connect to TranscriptExporter Sync and write meeting notes into the vault "${this.app.vault.getName()}".`
     });
     contentEl.createEl("p", {
       text: "Only allow this if you just clicked Connect in the TranscriptExporter browser extension."
